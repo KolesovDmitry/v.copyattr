@@ -1,0 +1,137 @@
+#!/usr/bin/env python
+# -*- coding: utf-8  -*-
+#
+############################################################################
+#
+# MODULE:      v.copyattr
+# AUTHOR(S):   Dmitry Kolesov (kolesov.dm@gmail.com);
+#
+# PURPOSE:     Copy attributes of an object to attribute table of the second vector map
+#              all attributes of the table will be the same.
+#
+# COPYRIGHT:   (C) 2014 Dmitry Kolesov / NextGIS company
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+############################################################################
+
+#%Module
+#% description: Copy attributes of an object to attribute table of the second vector map (all attributes of the table will be the same).
+#%End
+#%option
+#% key: from
+#% type: string
+#% description: name of the input vector map ()
+#% required : yes
+#% multiple: no
+#%end
+#%option
+#% key: output
+#% type: string
+#% description: name of the output vector map
+#% required : yes
+#% multiple: no
+#%end
+#%option
+#% key: cat
+#% type: integer
+#% description: category value used to determine the source record
+#% required : yes
+#% multiple: no
+#%end
+#%option
+#% key: tolayer
+#% type: integer
+#% description: layer number to store the attributes
+#% required : no
+#% multiple: no
+#%end
+
+import os, sys
+
+if "GISBASE" not in os.environ:
+    print "You must be in GRASS GIS to run this program."
+    sys.exit(1)
+
+import grass.script as grass
+import csv
+
+
+def main(options, flags):
+    from_map = options['from']
+    out_map = options['output']
+    cat = options['cat']
+
+    tolayer = options['tolayer']
+    if not tolayer:
+        tolayer = 1
+
+    # Connection info
+    p = grass.pipe_command('v.db.connect', map=from_map, flags='g')
+    conn_info = p.stdout.readline()
+    p.wait()
+    layer, table, cat_field, db, driver = conn_info.split()
+
+    # Get attributes
+    p = grass.pipe_command('v.db.select', map=from_map, where="%s=%s" % (cat_field, cat), layer=layer)
+    reader = csv.DictReader(p.stdout, delimiter='|')
+    try:
+        row = reader.next()
+        p.wait()
+    except StopIteration:
+        print "The category is not presented in the source table. Check the category number and field."
+        sys.exit(1)
+    fields = row.keys()
+
+    # Copy table
+    grass.run_command(
+         'db.copy',
+         from_driver=driver, to_driver=driver,
+         from_table=table, to_table=out_map,
+         from_database=db, to_database=db,
+         where="%s=%s" % (cat_field, cat),
+         quiet=True
+    )
+    grass.run_command('v.db.connect',
+        map=out_map, driver=driver, database=db, key=cat_field, layer=tolayer, table=out_map,
+        quiet=True
+    )
+
+    # Update attributes to conform the new categories of out_map
+
+    sql = "DELETE FROM %s" % (out_map, )
+    p2 = grass.feed_command('db.execute', input='-', quiet=True)
+    p2.stdin.write(sql) # Delete old information
+    p2.stdin.close()
+    p2.wait()
+
+    # Loop over new categories
+    p = grass.pipe_command('v.category', input=from_map, layer=tolayer, option='print')
+    for line in p.stdout:
+        # echo "INSERT into ... () values (...)" | db.execute
+        new_cat = line.strip()
+        row[cat_field] = new_cat
+        values = [str(row[f]) for f in fields]
+        values = ', '.join(values)
+
+        sql = "INSERT INTO %s (%s) VALUES (%s)" % (out_map, ','.join(fields), values)
+        p2 = grass.feed_command('db.execute', input='-', quiet=True)
+        p2.stdin.write(sql)
+        p2.stdin.close()
+        p2.wait()
+    p.wait()
+
+
+if __name__ == "__main__":
+    options, flags = grass.parser()
+    main(options, flags)
+    sys.exit(0)
+
