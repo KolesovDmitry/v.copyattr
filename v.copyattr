@@ -114,7 +114,7 @@ def main(options, flags):
     p2.wait()
 
     # Loop over new categories
-    p = grass.pipe_command('v.category', input=from_map, layer=tolayer, option='print')
+    p = grass.pipe_command('v.category', input=out_map, layer=tolayer, option='print')
     for line in p.stdout:
         # echo "INSERT into ... () values (...)" | db.execute
         new_cat = line.strip()
